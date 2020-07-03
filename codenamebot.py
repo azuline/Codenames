@@ -5,21 +5,22 @@
 #   show clue when pinging player to start guessing, let !c show clue to guessers #DONE
 #   show remaining team words left #DONE
 #   prevent player from stopping for opposing team #DONE
-#   simplify messages, make them better 
+#   simplify messages, make them better
 #   PM traceback errors to me #DONE
 #   allow multi-word clues, options for unlimited #DONE
 #   add !help #DONE
 
-from socket import *
-import random
-import math
-
 import datetime
 import json
+import math
+import os
+import pickle
+import random
+import ssl
 import time
 import traceback
-import pickle
-import ssl
+from socket import *
+
 
 def command(cmd):
     irc.send(cmd)
@@ -41,6 +42,8 @@ def PRIVMSG(target, msg):
     command(cmd)
     time.sleep(0.5)
 
+gamemaster = 'Mariven'
+pingif_filepath = 'pingif.txt'
 Creds = open('creds.txt', 'r').read().split('\n')
 HOST = 'irc.freenode.net'
 PORT = 6667
@@ -108,9 +111,10 @@ class Game:
             self.starters = []
             self.enders = []
             self.masters = []
+            self.pings = {}
 
             self.queue = []
-            
+
             self.wordlist = open('codenames.txt','r').read().split('\n')
             random.shuffle(self.wordlist)
             self.wordlist = [x for x in self.wordlist if len(x.split(' '))==1]
@@ -141,6 +145,8 @@ class Game:
             self.counter = 0
             self.cluegiven = False
             self.clue = None
+
+            self.load_pingifs()
 
         def genlist(self):
             a = 'Assassin: ' + self.assassin
@@ -182,11 +188,21 @@ class Game:
                         self.pinkteam.append(nick)
                         PRIVMSG(gamechannel, nick+' has joined the Pink team!')
             self.players.append(nick)
-            
+
+            players_to_ping = []
+            for player, count in self.pings.items():
+                if count == len(self.players) and player not in self.players:
+                    players_to_ping.append(player)
+
+            if players_to_ping:
+                PRIVMSG(gamechannel, 'Pinging %s, %d players.' % (
+                    ', '.join(players_to_ping), len(players))
+                )
+
         def removeplayer(self, nick):
             nick = ''.join([x for x in nick if x not in ['\n','\r']])
             if nick not in self.players:
-                PRIVMSG('Mariven', nick + ' is not playing.')
+                PRIVMSG(gamemaster, nick + ' is not playing.')
                 return
             PRIVMSG(gamechannel, nick + ' has left.')
             if self.started == True:
@@ -264,7 +280,7 @@ class Game:
                     elif nick in pinkteam:
                         self.pinkteam.remove(nick)
             self.players.remove(nick)
-            
+
         def startgame(self):
             self.started = True
             PRIVMSG(gamechannel, ', '.join(self.players)+', the game has started!')
@@ -280,7 +296,7 @@ class Game:
                 PRIVMSG(self.pinkmaster, self.genlist())
             PRIVMSG(gamechannel, self.greenmaster+': You\'re up! Give a clue.')
 
-            
+
         def sortplayers(self):
             if self.masters == []:
                 pass
@@ -288,7 +304,7 @@ class Game:
                 p = self.masters
                 for x in self.players:
                     if x not in p:
-                        p.append(x)                
+                        p.append(x)
             if self.queue!=[]:
                 self.queue = self.queue[::-1]
                 self.queue = [''.join([xx for xx in x if xx not in ['\r','\n']]) for x in self.queue]
@@ -297,7 +313,7 @@ class Game:
                 for x in self.queue:
                     self.players.append(x)
                 self.players = self.players[::-1]
-                
+
             if len(self.players) == 2:
                 self.greenteam.append(self.players[0])
                 self.greenteam.append(self.players[1])
@@ -340,7 +356,7 @@ class Game:
                     PRIVMSG(gamechannel, collate(self.pinkteam[1:])+greeting)
                 else:
                     PRIVMSG(gamechannel, self.grayteam[0]+greeting)
-            if infty == False: 
+            if infty == False:
                 PRIVMSG(gamechannel, 'You have '+ str(self.counter)+' guesses.')
             else:
                 PRIVMSG(gamechannel, 'You have unlimited guesses.')
@@ -351,7 +367,7 @@ class Game:
             self.counter -= 1
             word = word.capitalize()
             self.wordlist.remove(word)
-            
+
             if word == self.assassin:
                 self.endgame('assassin', nick=nick)
                 return
@@ -363,7 +379,7 @@ class Game:
                 self.endturn()
                 return
 
-            if word in self.greenwords: 
+            if word in self.greenwords:
                 PRIVMSG(gamechannel, 'A Green agent has been revealed. ' + str(len(self.greenwords)-1) + ' left.')
                 self.guessedgreen.append(word)
                 self.greenwords.remove(word)
@@ -384,18 +400,18 @@ class Game:
                 if self.turn == 'green':
                     self.endturn()
                     return
-                    
+
             if self.counter == 0:
                 self.endturn()
 
         def endturn(self):
             self.cluegiven = False
             self.counter = 0
-            if len(self.guessedgreen) > 0:                 
+            if len(self.guessedgreen) > 0:
                 PRIVMSG(gamechannel, 'Known Green agents: '+collate(self.guessedgreen))
-            if len(self.guessedpink) > 0: 
+            if len(self.guessedpink) > 0:
                 PRIVMSG(gamechannel, 'Known Pink agents: '+collate(self.guessedpink))
-            if len(self.guessedcivs) > 0: 
+            if len(self.guessedcivs) > 0:
                 PRIVMSG(gamechannel, 'Known Civilians: '+collate(self.guessedcivs))
             PRIVMSG(gamechannel, 'There are ' + str(len(self.greenwords)) + ' Green agents left, and ' + str(len(self.pinkwords)) + ' Pink agents left.')
 
@@ -408,12 +424,12 @@ class Game:
                     PRIVMSG(gamechannel, self.greenmaster+': You\'re up again! Give a clue.')
                     PRIVMSG(self.greenmaster, self.genlist())
                 return
-            
+
             if self.turn == 'pink':
                 self.turn = 'green'
                 PRIVMSG(gamechannel, self.greenmaster+': You\'re up! Give a clue.')
                 PRIVMSG(self.greenmaster, self.genlist())
-                    
+
 
         def endgame(self, arg = 'green', nick = None):
             if arg == 'green':
@@ -427,9 +443,44 @@ class Game:
                     PRIVMSG(gamechannel, 'The assassin has been revealed, causing the Green team to win!')
                 else:
                     PRIVMSG(gamechannel, 'The assassin has been revealed, causing everybody to lose!')
-                
+
             PRIVMSG(gamechannel, self.genall())
             reset()
+
+        def load_pingifs(self):
+            if not os.path.exists(pingif_filepath):
+                return
+
+            with open(pingif_filepath, 'r') as f:
+                for line in f:
+                    try:
+                        saved_player, ping_count = line.split(' ')
+                        self.pings[saved_player] = int(ping_count)
+                    except ValueError:
+                        PRIVSMG(gamemaster, 'Corrupted pingif file, pls fix.')
+                        exit(1)
+
+        def add_pingif(self, player, count):
+            try:
+                count = int(count)
+            except ValueError:
+                PRIVMSG(player, 'Pingif count must be a positive integer.')
+                return
+
+            if count == 0:
+                del self.pings[player]
+                PRIVMSG(player, 'Removed pingif count.')
+            elif count > 0:
+                self.pings[player] = count
+                PRIVMSG(player, 'Set pingif count to %s.' % count)
+            else:
+                PRIVMSG(player, 'Pingif count must be a positive integer.')
+
+            with open(pingif_filepath, 'w') as f:
+                for player, count in self.pings.items():
+                    f.write(' '.join([player, str(count)]) + '\n')
+
+
 
 game = Game()
 
@@ -461,27 +512,27 @@ while True:
 
     if data[0:4]=='PING':
             irc.send ('PONG '+data.split(' ')[1]+'\r\n')
-            
+
     if thing=='NICK':
         print timestamp+author+' has changed nick to '+data.split(' ')[2][1:].split('\r')[0]
-        
+
     elif thing=='JOIN':
         print timestamp+author+' has joined '+chan
-        
+
     elif thing=='PART':
         print timestamp+author+' has left '+chan
-                
+
     elif thing=='PRIVMSG':
         print (timestamp+chan+' <'+author+'> '+''.join([x+' ' for x in data.split(' ')[3:]])[1:].split('\r')[0]).replace('ACTION','*')
         if echo:
             PRIVMSG('##ovoraptor', (timestamp+chan+' <'+author+'> '+''.join([x+' ' for x in data.split(' ')[3:]])[1:].split('\r')[0]).replace('ACTION','*'))
         msg=''.join([x+' ' for x in data.split(' ')[3:]])[1:]
         args=msg.split(' ')
-        
+
     elif thing=='NOTICE':
         a=datetime.datetime.now()
         print timestamp+chan+' -'+author+'- '+''.join([x+' ' for x in data.split(' ')[3:]])[1:].split('\r')[0]
-        
+
     else:
     	pass
         #print data
@@ -494,7 +545,7 @@ while True:
         if args[0].count(symbol)<2 and (len(args[0])>0 and args[0][0]==symbol):
                 print args[0]
                 q=parse(args[0],True)
-                
+
     #######################################
     #######################################
             #MAIN CODE BEGINS HERE
@@ -519,11 +570,11 @@ while True:
                         irc.send('PART '+chan+'\r\n')
                     except:
                         pass
-                    
+
                 if symbol+'ajoin'==q and author in users:
                     try:
                         chan=args[1]
-                        irc.send('JOIN '+chan+'\r\n')                   
+                        irc.send('JOIN '+chan+'\r\n')
                     except:
                         pass
 
@@ -545,7 +596,8 @@ while True:
                 if symbol+'eval'==q and author in users:
                     k = eval(''.join([x for x in ' '.join(args[1:]) if x not in ['\r', '\n']]))
                     if k != None:
-                        PRIVMSG('Mariven', str(k))
+                        PRIVMSG(gamemaster, str(k))
+
 
                 if symbol+'savegame'==q:
                     k = ''
@@ -553,7 +605,7 @@ while True:
                         k = parse(args[1])
                     f = open('savedCNgame.txt', 'w')
                     pickle.dump(game, f)
-                    if k != 'silent': 
+                    if k != 'silent':
                         PRIVMSG(gamechannel, 'Game saved!')
                     f.close()
 
@@ -564,13 +616,13 @@ while True:
                     f = open('savedCNgame.txt', 'r')
                     game = pickle.load(f)
                     f.close()
-                    if k != 'silent': 
+                    if k != 'silent':
                         PRIVMSG(gamechannel, 'Game loaded!')
                         PRIVMSG(gamechannel, 'If necessary, use !words to see remaining and known words, !players to see team affiliations, and !c to see the current clue.')
-                if symbol + 'words' == q and chan != gamechannel: 
-					if author in [game.greenmaster, game.pinkmaster]: 
+                if symbol + 'words' == q and chan != gamechannel:
+					if author in [game.greenmaster, game.pinkmaster]:
 						PRIVMSG(author, game.genlist())
-					else: 
+					else:
 						PRIVMSG(author, collate(game.wordlist))
 
 
@@ -613,8 +665,8 @@ while True:
                             PRIVMSG(gamechannel, author+': The game has already started!')
                         else:
                             random.shuffle(game.players)
-                            
-                    if symbol+'join'==q or symbol+'j'==q or symbol+'jonge'==q:
+
+                    if symbol+'join'==q or symbol+'j'==q or symbol+'jonge'==q or symbol+'jord'==q:
                         if author in ['swagiloo','Iciloo']:
                             PRIVMSG(gamechannel, 'parachute')
                         if author in game.players:
@@ -629,7 +681,7 @@ while True:
                             game.addplayer(args[1])
 
                     if symbol+'kick'==q and author in users:
-                        if author not in game.players: 
+                        if author not in game.players:
                             PRIVMSG(gamechannel, author+': You must join to kick!')
                         elif len(args)==0:
                             PRIVMSG(gamechannel, author+': Who?')
@@ -638,8 +690,14 @@ while True:
                         else:
                             game.removeplayer(parse(args[1]))
 
+                    if symbol+'pingif'==q:
+                        if len(args) != 2:
+                            PRIVMSG(gamechannel, author+': Syntax: !pingif {count}')
+
+                        game.add_pingif(author, parse(args[1], sym=['-']))
+
                     if symbol+'help'==q:
-                        PRIVMSG(gamechannel, "Commands: (j)oin, leave, (c)lue, (g)uess, (s)top.")
+                        PRIVMSG(gamechannel, "Commands: (j)oin, leave, (c)lue, (g)uess, (s)top, (p)ingif.")
 
                     if symbol+'spoof'==q:
                         spoof[parse(args[1])] = parse(args[2])
@@ -656,10 +714,10 @@ while True:
                         elif game.turn == 'pink' and author != game.pinkmaster:
                             PRIVMSG(gamechannel, author+': It isn\'t your turn to hint.')
                         elif game.started == False:
-                            PRIVMSG(gamechannel, author+': A game has not started.')                            
+                            PRIVMSG(gamechannel, author+': A game has not started.')
                         else:
                             game.giveclue(' '.join(args[1:-1]),args[-1])
-                            
+
                     if symbol+'g'==q or symbol+'guess'==q:
                         if game.started == False:
                             PRIVMSG(gamechannel, author+': A game has not started!')
@@ -676,7 +734,7 @@ while True:
                         else:
                             #print args
                             game.guessword(author, args[1][::-1][2:][::-1])
-                        
+
                     if symbol+'s'==q or symbol+'stop'==q or symbol+'done'==q:
                         if game.started == False:
                             PRIVMSG(gamechannel, author+': A game has not started!')
@@ -695,7 +753,7 @@ while True:
                             game.endturn()
 
                     if symbol+'players'==q:
-                        if game.started == False: 
+                        if game.started == False:
                             PRIVMSG(gamechannel, 'Currently playing: '+collate(game.players))
                         if game.started == True:
                             PRIVMSG(gamechannel, 'Green team: '+collate(game.greenteam)+' (spymaster is '+game.greenmaster+')')
@@ -703,17 +761,17 @@ while True:
                                 PRIVMSG(gamechannel, 'Pink team: '+collate(game.pinkteam)+' (spymaster is '+game.pinkmaster+')')
                             if len(game.grayteam)>0:
                                 PRIVMSG(gamechannel, 'Gray team: ' +game.grayteam[0])
-                                
+
                     if symbol+'words'==q:
-                        if game.started == False: 
+                        if game.started == False:
                             PRIVMSG(gamechannel, "The game hasn't started yet.")
                         else:
                             PRIVMSG(gamechannel, 'Green agents: '+collate(game.guessedgreen))
                             PRIVMSG(gamechannel, 'Pink agents: '+collate(game.guessedpink))
                             PRIVMSG(gamechannel, 'Civilians: '+collate(game.guessedcivs))
                             PRIVMSG(gamechannel, 'Remaining words: ' + collate(game.wordlist))
-                        
+
     except Exception as e:
         traceback.print_exc()
         print(e)
-        PRIVMSG("Mariven", 'Something broke.')
+        PRIVMSG(gamemaster, 'Something broke.')
